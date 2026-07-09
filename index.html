@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan Troubleshooter — Raw vs Filtered</title>
+<style>
+  :root {
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --muted:          #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-raw:     #2a78d6;
+    --series-filt:    #eb6834;
+    --series-delta:   #4a3aa7;
+    --accent:         #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted:          #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-raw:     #3987e5;
+      --series-filt:    #d95926;
+      --series-delta:   #9085e9;
+      --accent:         #3987e5;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 48px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 6px; }
+  header h1 { font-size: 20px; font-weight: 650; margin: 0; }
+  #fileName { color: var(--text-secondary); font-size: 13px; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 16px; }
+  .btn {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-primary); font: inherit; font-size: 13px; font-weight: 550;
+    padding: 6px 14px; border-radius: 8px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+
+  .drop-active::after {
+    content: "Drop CSV or JSON to load";
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--page) 82%, transparent);
+    border: 2px dashed var(--accent); border-radius: 12px;
+    font-size: 20px; font-weight: 600; color: var(--accent);
+    pointer-events: none; z-index: 50;
+  }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px 12px;
+  }
+  .tile .lab { font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+  .tile .val { font-size: 22px; font-weight: 650; margin-top: 2px; }
+  .tile .sub { font-size: 12px; color: var(--text-secondary); }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px 10px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 14px; font-weight: 650; margin: 0; }
+  .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 4px; }
+  .card-head .spacer { flex: 1; }
+
+  .legend { display: flex; gap: 14px; align-items: center; }
+  .legend button {
+    appearance: none; background: none; border: none; padding: 2px 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px;
+    font: inherit; font-size: 13px; color: var(--text-secondary);
+  }
+  .legend .key { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; border-radius: 2px; }
+  .legend button.off { opacity: 0.38; }
+  .legend button.off .key { border-top-style: dotted; }
+
+  .chart-box { position: relative; }
+  .chart-box canvas { display: block; width: 100%; touch-action: none; cursor: crosshair; border-radius: 6px; }
+  .chart-box canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.14);
+    padding: 7px 10px; font-size: 12.5px; min-width: 130px;
+  }
+  .tooltip .tx { color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+  .tooltip .row { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
+  .tooltip .k { display: inline-block; width: 14px; height: 0; border-top: 2.5px solid; border-radius: 2px; flex: none; }
+  .tooltip .v { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tooltip .n { color: var(--text-secondary); }
+
+  .zoomhint { color: var(--muted); font-size: 11.5px; margin: 4px 2px 2px; min-height: 16px; }
+
+  .meta-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px 20px; padding: 6px 0 10px;
+  }
+  .meta-grid .mk { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+  .meta-grid .mv { font-size: 13px; color: var(--text-primary); overflow-wrap: anywhere; }
+
+  #tableCard { display: none; }
+  .table-scroll { max-height: 420px; overflow: auto; margin-top: 8px; border-top: 1px solid var(--grid); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 4px 12px 4px 4px; font-variant-numeric: tabular-nums; }
+  th {
+    position: sticky; top: 0; background: var(--surface-1);
+    color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.02em;
+    border-bottom: 1px solid var(--grid);
+  }
+  td { border-bottom: 1px solid var(--grid); color: var(--text-secondary); }
+  td:first-child, th:first-child { text-align: left; }
+
+  #emptyState { text-align: center; color: var(--muted); padding: 60px 0; font-size: 15px; }
+  #err { color: #d03b3b; font-size: 13px; margin: 8px 0; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Scan Troubleshooter</h1>
+    <span id="fileName"></span>
+  </header>
+
+  <div class="controls">
+    <button class="btn primary" id="openBtn">Open CSV / JSON…</button>
+    <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden>
+    <button class="btn" id="resetZoomBtn">Reset zoom</button>
+    <button class="btn" id="tableBtn">Table view</button>
+    <span class="hint">or drag &amp; drop a file anywhere · scroll = zoom · drag = pan · double-click = reset</span>
+  </div>
+  <div id="err"></div>
+
+  <div id="content" style="display:none">
+    <div class="tiles" id="tiles"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Profile — raw vs filtered (Z over X position)</h2>
+        <div class="spacer"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div class="chart-box">
+        <canvas id="mainChart" tabindex="0" role="img" aria-label="Line chart of raw and filtered Z profile over X position. Use arrow keys to step through values; the table view lists every point."></canvas>
+        <div class="tooltip" id="mainTip"></div>
+      </div>
+      <div class="zoomhint" id="zoomInfo"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Deviation — raw &minus; filtered</h2>
+        <div class="spacer"></div>
+        <span class="hint" id="deltaNote"></span>
+      </div>
+      <div class="chart-box">
+        <canvas id="deltaChart" tabindex="0" role="img" aria-label="Line chart of the deviation between raw and filtered Z at each raw X position."></canvas>
+        <div class="tooltip" id="deltaTip"></div>
+      </div>
+    </div>
+
+    <div class="card" id="metaCard" style="display:none">
+      <div class="card-head"><h2>Scan parameters</h2><div class="spacer"></div><span class="hint">from the file footer</span></div>
+      <div class="meta-grid" id="metaGrid"></div>
+    </div>
+
+    <div class="card" id="tableCard">
+      <div class="card-head"><h2>Data table</h2><div class="spacer"></div><span class="hint" id="tableNote"></span></div>
+      <div class="table-scroll"><table id="dataTable"></table></div>
+    </div>
+  </div>
+
+  <div id="emptyState">Open a scan file to get started — a CSV with <b>X&#8209;Pos / Z&#8209;Raw / Z&#8209;Filtered</b> columns,<br>or a JSON with <b>arRawX / arRawZ / arFiltX / arFiltZ</b> arrays.</div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------- state ---------------- */
+
+const state = {
+  data: null,           // { raw:{x,z}, filt:{x,z}, delta:{x,z}, sharedGrid:bool }
+  xDomain: null,        // current [min,max] view (shared by both charts)
+  xFull: null,          // full [min,max]
+  show: { raw: true, filt: true },
+  hoverX: null,         // data-space x of crosshair, or null
+};
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (v, d) => v == null || !isFinite(v) ? "–" : v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+/* ---------------- parsing ---------------- */
+
+function parseFile(name, text) {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("File is empty.");
+  if (trimmed[0] === "{" || trimmed[0] === "[") return parseJSON(trimmed);
+  return parseCSV(trimmed);
+}
+
+const normKey = s => String(s).toLowerCase().replace(/[^a-z]/g, "");
+
+function parseJSON(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (e) { throw new Error("Not valid JSON: " + e.message); }
+
+  // Form 1: { arRawX, arRawZ, arFiltX, arFiltZ } (key match is fuzzy)
+  if (obj && !Array.isArray(obj) && typeof obj === "object") {
+    const keys = Object.keys(obj);
+    const find = (part, axis) => keys.find(k => {
+      const n = normKey(k);
+      return n.includes(part) && n.endsWith(axis) && Array.isArray(obj[k]);
+    });
+    const rx = find("raw", "x"), rz = find("raw", "z") || find("raw", "y");
+    const fx = find("filt", "x"), fz = find("filt", "z") || find("filt", "y");
+    if (rx && rz && fx && fz) {
+      return build(
+        { x: obj[rx].map(Number), z: obj[rz].map(Number) },
+        { x: obj[fx].map(Number), z: obj[fz].map(Number) }
+      );
+    }
+    throw new Error("JSON object found, but not the expected arRawX / arRawZ / arFiltX / arFiltZ arrays.");
+  }
+
+  // Form 2: array of row objects, e.g. [{ "X-Pos":…, "Z-Raw":…, "Z-Filtered":… }, …]
+  if (Array.isArray(obj)) {
+    if (!obj.length || typeof obj[0] !== "object") throw new Error("JSON array found, but rows are not objects with named fields.");
+    const keys = Object.keys(obj[0]);
+    const kx = keys.find(k => { const n = normKey(k); return n === "x" || n.startsWith("xpos"); });
+    const kr = keys.find(k => normKey(k).includes("raw"));
+    const kf = keys.find(k => normKey(k).includes("filt"));
+    if (!kx || !kr || !kf) throw new Error("Couldn't find X-Pos / Z-Raw / Z-Filtered fields in the JSON rows. Found: " + keys.join(", "));
+    const x = [], zr = [], zf = [];
+    for (const row of obj) {
+      const xv = Number(row[kx]), rv = Number(row[kr]), fv = Number(row[kf]);
+      if (xv === 0 && rv === 0 && fv === 0) continue; // instrument zero-padding
+      x.push(xv); zr.push(rv); zf.push(fv);
+    }
+    return build({ x, z: zr }, { x: x.slice(), z: zf }, true);
+  }
+  throw new Error("Unrecognized JSON structure.");
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
+  if (lines.length < 2) throw new Error("CSV needs a header row and at least one data row.");
+  const delim = [";", "\t", ","].map(d => ({ d, n: lines[0].split(d).length }))
+    .sort((a, b) => b.n - a.n)[0];
+  if (delim.n < 2) throw new Error("Couldn't detect a column separator (tried ; , and tab).");
+  const sep = delim.d;
+
+  const cells0 = lines[0].split(sep).map(s => s.trim().replace(/^"|"$/g, ""));
+  const looksLikeHeader = cells0.some(c => isNaN(parseFloat(c.replace(",", "."))));
+  const headers = looksLikeHeader ? cells0 : cells0.map((_, i) => "col" + i);
+  const dataLines = looksLikeHeader ? lines.slice(1) : lines;
+
+  let ix = -1, ir = -1, if_ = -1;
+  headers.forEach((h, i) => {
+    const n = normKey(h);
+    if (ix < 0 && (n === "x" || n.startsWith("xpos"))) ix = i;
+    if (ir < 0 && n.includes("raw")) ir = i;
+    if (if_ < 0 && n.includes("filt")) if_ = i;
+  });
+  if (ix < 0 || ir < 0 || if_ < 0) {
+    if (headers.length >= 3 && !looksLikeHeader) { ix = 0; ir = 1; if_ = 2; }
+    else throw new Error("Couldn't find X-Pos / Z-Raw / Z-Filtered columns. Headers found: " + headers.join(", "));
+  }
+
+  // decimal commas only make sense when comma is NOT the column separator
+  const num = s => {
+    s = s.trim().replace(/^"|"$/g, "");
+    if (sep !== "," && s.includes(",") && !s.includes(".")) s = s.replace(",", ".");
+    return parseFloat(s);
+  };
+
+  const x = [], zr = [], zf = [], meta = [];
+  for (const line of dataLines) {
+    const c = line.split(sep).map(s => s.trim().replace(/^"|"$/g, ""));
+    const xv = num(c[ix] || ""), rv = num(c[ir] || ""), fv = num(c[if_] || "");
+    if (!isFinite(xv)) {
+      // footer rows: "Wheel Type;Large;;;…" — collect as key/value metadata
+      if (c[0] && c[1] !== undefined && c[1] !== "") meta.push([c[0], c[1]]);
+      continue;
+    }
+    if (xv === 0 && rv === 0 && fv === 0) continue;    // instrument zero-padding
+    x.push(xv); zr.push(rv); zf.push(fv);
+  }
+  if (!x.length) throw new Error("No numeric data rows found.");
+  const out = build({ x, z: zr }, { x: x.slice(), z: zf }, true);
+  out.meta = meta;
+  return out;
+}
+
+/* sort by x, drop non-finite pairs */
+function cleanSeries(s) {
+  const idx = s.x.map((_, i) => i)
+    .filter(i => isFinite(s.x[i]) && isFinite(s.z[i]))
+    .sort((a, b) => s.x[a] - s.x[b]);
+  return { x: idx.map(i => s.x[i]), z: idx.map(i => s.z[i]) };
+}
+
+function build(raw, filt, sharedGrid = false) {
+  raw = cleanSeries(raw); filt = cleanSeries(filt);
+  if (!raw.x.length || !filt.x.length) throw new Error("One of the series has no valid points.");
+
+  // delta = raw − filtered, on the raw X grid (filtered interpolated when grids differ)
+  const dx = [], dz = [];
+  for (let i = 0; i < raw.x.length; i++) {
+    const fz = sharedGrid && filt.x.length === raw.x.length ? filt.z[i] : interp(filt, raw.x[i]);
+    if (fz != null) { dx.push(raw.x[i]); dz.push(raw.z[i] - fz); }
+  }
+  return { raw, filt, delta: { x: dx, z: dz }, sharedGrid };
+}
+
+function interp(s, xv) {
+  const { x, z } = s;
+  if (xv < x[0] || xv > x[x.length - 1]) return null;
+  let lo = 0, hi = x.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; (x[m] <= xv ? lo = m : hi = m); }
+  if (x[hi] === x[lo]) return z[lo];
+  const t = (xv - x[lo]) / (x[hi] - x[lo]);
+  return z[lo] + t * (z[hi] - z[lo]);
+}
+
+function nearestIdx(xs, xv) {
+  let lo = 0, hi = xs.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; (xs[m] <= xv ? lo = m : hi = m); }
+  return (xv - xs[lo] <= xs[hi] - xv) ? lo : hi;
+}
+
+/* ---------------- chart ---------------- */
+
+function makeChart(canvasId, tipId, getSeries, opts) {
+  const canvas = document.getElementById(canvasId);
+  const tip = document.getElementById(tipId);
+  const ctx = canvas.getContext("2d");
+  const PAD = { l: 64, r: 16, t: 10, b: 26 };
+  const H = opts.height;
+  let plot = { x0: 0, x1: 0, y0: 0, y1: 0 }, yDom = [0, 1];
+
+  function xToPx(v) { const [a, b] = state.xDomain; return plot.x0 + (v - a) / (b - a) * (plot.x1 - plot.x0); }
+  function pxToX(p) { const [a, b] = state.xDomain; return a + (p - plot.x0) / (plot.x1 - plot.x0) * (b - a); }
+  function yToPx(v) { const [a, b] = yDom; return plot.y1 - (v - a) / (b - a) * (plot.y1 - plot.y0); }
+
+  function niceTicks(a, b, n) {
+    const span = b - a; if (!(span > 0)) return [a];
+    const step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || 10 * mag;
+    const ticks = [];
+    for (let t = Math.ceil(a / step) * step; t <= b + step * 1e-9; t += step) ticks.push(t);
+    return ticks;
+  }
+  const decimalsFor = ticks => {
+    if (ticks.length < 2) return 2;
+    const step = Math.abs(ticks[1] - ticks[0]);
+    return step >= 1 ? 0 : Math.max(0, Math.min(6, Math.ceil(-Math.log10(step))));
+  };
+
+  function draw() {
+    if (!state.data || !state.xDomain) return;
+    const w = canvas.clientWidth, dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(H * dpr);
+      canvas.style.height = H + "px";
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, H);
+    plot = { x0: PAD.l, x1: w - PAD.r, y0: PAD.t, y1: H - PAD.b };
+
+    const series = getSeries().filter(s => s.visible);
+    // y-domain fits visible data in the current x window
+    let ymin = Infinity, ymax = -Infinity;
+    const [xa, xb] = state.xDomain;
+    for (const s of series) {
+      const xs = s.data.x, zs = s.data.z;
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] < xa || xs[i] > xb) continue;
+        if (zs[i] < ymin) ymin = zs[i];
+        if (zs[i] > ymax) ymax = zs[i];
+      }
+    }
+    if (!isFinite(ymin)) { ymin = 0; ymax = 1; }
+    if (opts.includeZero) { ymin = Math.min(ymin, 0); ymax = Math.max(ymax, 0); }
+    const pad = (ymax - ymin) * 0.08 || Math.abs(ymax) * 0.01 || 1;
+    yDom = [ymin - pad, ymax + pad];
+
+    // grid + ticks
+    const xt = niceTicks(xa, xb, 8), yt = niceTicks(yDom[0], yDom[1], 5);
+    const xd = decimalsFor(xt), yd = decimalsFor(yt);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = css("--grid");
+    ctx.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.fillStyle = css("--muted");
+    for (const t of yt) {
+      const y = Math.round(yToPx(t)) + 0.5;
+      if (y < plot.y0 || y > plot.y1) continue;
+      ctx.beginPath(); ctx.moveTo(plot.x0, y); ctx.lineTo(plot.x1, y); ctx.stroke();
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText(fmt(t, yd), plot.x0 - 8, y);
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (const t of xt) {
+      const x = xToPx(t);
+      if (x < plot.x0 - 1 || x > plot.x1 + 1) continue;
+      ctx.fillText(fmt(t, xd), x, plot.y1 + 7);
+    }
+    // baseline
+    ctx.strokeStyle = css("--baseline");
+    ctx.beginPath(); ctx.moveTo(plot.x0, plot.y1 + 0.5); ctx.lineTo(plot.x1, plot.y1 + 0.5); ctx.stroke();
+    // zero line for delta
+    if (opts.includeZero && yDom[0] < 0 && yDom[1] > 0) {
+      const y = Math.round(yToPx(0)) + 0.5;
+      ctx.strokeStyle = css("--baseline");
+      ctx.beginPath(); ctx.moveTo(plot.x0, y); ctx.lineTo(plot.x1, y); ctx.stroke();
+    }
+
+    // series
+    ctx.save();
+    ctx.beginPath(); ctx.rect(plot.x0, plot.y0, plot.x1 - plot.x0, plot.y1 - plot.y0); ctx.clip();
+    for (const s of series) {
+      const xs = s.data.x, zs = s.data.z;
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+      ctx.beginPath();
+      let started = false;
+      const i0 = Math.max(0, nearestIdx(xs, xa) - 1), i1 = Math.min(xs.length - 1, nearestIdx(xs, xb) + 1);
+      for (let i = i0; i <= i1; i++) {
+        const px = xToPx(xs[i]), py = yToPx(zs[i]);
+        if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // endpoint direct labels (ink text + short colored key)
+    if (opts.endLabels) {
+      ctx.font = '11.5px system-ui, -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      const used = [];
+      for (const s of series) {
+        const xs = s.data.x, zs = s.data.z;
+        let i = xs.length - 1;
+        while (i > 0 && xs[i] > xb) i--;
+        let y = Math.max(plot.y0 + 8, Math.min(plot.y1 - 8, yToPx(zs[i])));
+        while (used.some(u => Math.abs(u - y) < 15)) y += 15;
+        used.push(y);
+        const lx = plot.x1 - ctx.measureText(s.name).width - 4;
+        ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(lx - 16, y); ctx.lineTo(lx - 4, y); ctx.stroke();
+        ctx.fillStyle = css("--text-secondary");
+        ctx.fillText(s.name, lx, y);
+      }
+    }
+
+    // crosshair + hover markers
+    if (state.hoverX != null && state.hoverX >= xa && state.hoverX <= xb) {
+      const cx = Math.round(xToPx(state.hoverX)) + 0.5;
+      ctx.strokeStyle = css("--muted"); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, plot.y0); ctx.lineTo(cx, plot.y1); ctx.stroke();
+      for (const s of series) {
+        const i = nearestIdx(s.data.x, state.hoverX);
+        const px = xToPx(s.data.x[i]), py = yToPx(s.data.z[i]);
+        if (px < plot.x0 || px > plot.x1) continue;
+        ctx.fillStyle = s.color;
+        ctx.strokeStyle = css("--surface-1"); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+    }
+  }
+
+  function showTip() {
+    if (state.hoverX == null || !state.data) { tip.style.display = "none"; return; }
+    const [xa, xb] = state.xDomain;
+    if (state.hoverX < xa || state.hoverX > xb) { tip.style.display = "none"; return; }
+    const series = getSeries().filter(s => s.visible);
+    if (!series.length) { tip.style.display = "none"; return; }
+    const refIdx = nearestIdx(series[0].data.x, state.hoverX);
+    const xv = series[0].data.x[refIdx];
+    tip.textContent = "";
+    const tx = document.createElement("div"); tx.className = "tx";
+    tx.textContent = "X " + fmt(xv, 3);
+    tip.appendChild(tx);
+    for (const s of series) {
+      const i = nearestIdx(s.data.x, state.hoverX);
+      const row = document.createElement("div"); row.className = "row";
+      const k = document.createElement("span"); k.className = "k"; k.style.borderTopColor = s.color;
+      const v = document.createElement("span"); v.className = "v"; v.textContent = fmt(s.data.z[i], 4);
+      const n = document.createElement("span"); n.className = "n"; n.textContent = s.name;
+      row.append(k, v, n); tip.appendChild(row);
+    }
+    tip.style.display = "block";
+    const boxW = canvas.clientWidth;
+    const px = xToPx(state.hoverX);
+    let left = px + 14;
+    if (left + tip.offsetWidth > boxW - 4) left = px - tip.offsetWidth - 14;
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = "14px";
+  }
+
+  /* interaction: crosshair, wheel zoom, drag pan, dblclick reset, arrow keys */
+  let dragging = null;
+  canvas.addEventListener("pointerdown", e => {
+    if (!state.data) return;
+    dragging = { px: e.clientX, dom: state.xDomain.slice() };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!state.data) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    if (dragging) {
+      const dx = e.clientX - dragging.px;
+      const [a, b] = dragging.dom;
+      const shift = -dx / (plot.x1 - plot.x0) * (b - a);
+      setDomain([a + shift, b + shift], true);
+      return;
+    }
+    if (mx >= plot.x0 - 4 && mx <= plot.x1 + 4) {
+      state.hoverX = pxToX(Math.max(plot.x0, Math.min(plot.x1, mx)));
+      redrawAll();
+    }
+  });
+  const endDrag = () => { dragging = null; };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("pointerleave", () => { if (!dragging) { state.hoverX = null; redrawAll(); } });
+  canvas.addEventListener("dblclick", () => state.xFull && setDomain(state.xFull.slice()));
+  canvas.addEventListener("wheel", e => {
+    if (!state.data) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const fx = pxToX(e.clientX - rect.left);
+    const [a, b] = state.xDomain;
+    const f = Math.exp(e.deltaY * 0.0015);
+    setDomain([fx + (a - fx) * f, fx + (b - fx) * f], true);
+  }, { passive: false });
+  canvas.addEventListener("keydown", e => {
+    if (!state.data) return;
+    const s = getSeries().find(v => v.visible); if (!s) return;
+    const xs = s.data.x;
+    let i = state.hoverX == null ? Math.floor(xs.length / 2) : nearestIdx(xs, state.hoverX);
+    if (e.key === "ArrowRight") i = Math.min(xs.length - 1, i + (e.shiftKey ? 25 : 1));
+    else if (e.key === "ArrowLeft") i = Math.max(0, i - (e.shiftKey ? 25 : 1));
+    else if (e.key === "Escape") { state.hoverX = null; redrawAll(); return; }
+    else return;
+    e.preventDefault();
+    state.hoverX = xs[i];
+    const [a, b] = state.xDomain;
+    if (state.hoverX < a || state.hoverX > b) {
+      const w2 = (b - a) / 2; setDomain([state.hoverX - w2, state.hoverX + w2], true);
+    } else redrawAll();
+  });
+
+  return { draw, showTip };
+}
+
+/* ---------------- domain / redraw ---------------- */
+
+function clampDomain(dom) {
+  let [a, b] = dom;
+  const [fa, fb] = state.xFull;
+  const minSpan = (fb - fa) / 5000;
+  if (b - a < minSpan) { const c = (a + b) / 2; a = c - minSpan / 2; b = c + minSpan / 2; }
+  const span = Math.min(b - a, fb - fa);
+  if (a < fa) { a = fa; b = fa + span; }
+  if (b > fb) { b = fb; a = fb - span; }
+  return [a, b];
+}
+
+function setDomain(dom, clamp) {
+  state.xDomain = clamp ? clampDomain(dom) : dom;
+  redrawAll();
+}
+
+let charts = [];
+function redrawAll() {
+  for (const c of charts) { c.draw(); c.showTip(); }
+  const zi = document.getElementById("zoomInfo");
+  if (state.xDomain && state.xFull) {
+    const [a, b] = state.xDomain, [fa, fb] = state.xFull;
+    const zoomed = a > fa + 1e-9 || b < fb - 1e-9;
+    zi.textContent = zoomed
+      ? `Viewing X ${fmt(a, 2)} to ${fmt(b, 2)} (${fmt((fb - fa) / (b - a), 1)}× zoom) — double-click to reset`
+      : "";
+  }
+}
+
+/* ---------------- UI assembly ---------------- */
+
+const SERIES_DEFS = [
+  { id: "raw",  name: "Raw",      cssVar: "--series-raw" },
+  { id: "filt", name: "Filtered", cssVar: "--series-filt" },
+];
+
+function mainSeries() {
+  return SERIES_DEFS.map(d => ({
+    name: d.name, color: css(d.cssVar),
+    data: state.data[d.id], visible: state.show[d.id],
+  }));
+}
+function deltaSeries() {
+  return [{ name: "Raw − Filtered", color: css("--series-delta"), data: state.data.delta, visible: true }];
+}
+
+function renderLegend() {
+  const el = document.getElementById("legend");
+  el.textContent = "";
+  for (const d of SERIES_DEFS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = state.show[d.id] ? "" : "off";
+    btn.setAttribute("aria-pressed", String(state.show[d.id]));
+    const key = document.createElement("span"); key.className = "key"; key.style.borderTopColor = css(d.cssVar);
+    const label = document.createElement("span");
+    label.textContent = `${d.name} (${state.data[d.id].x.length.toLocaleString("en-US")} pts)`;
+    btn.append(key, label);
+    btn.addEventListener("click", () => {
+      state.show[d.id] = !state.show[d.id];
+      renderLegend(); redrawAll();
+    });
+    el.appendChild(btn);
+  }
+}
+
+function renderTiles() {
+  const { raw, filt, delta } = state.data;
+  let maxAbs = 0, maxAt = null, sum2 = 0;
+  for (let i = 0; i < delta.z.length; i++) {
+    const a = Math.abs(delta.z[i]);
+    if (a > maxAbs) { maxAbs = a; maxAt = delta.x[i]; }
+    sum2 += delta.z[i] * delta.z[i];
+  }
+  const rms = delta.z.length ? Math.sqrt(sum2 / delta.z.length) : NaN;
+  const tiles = [
+    { lab: "Raw points", val: raw.x.length.toLocaleString("en-US") },
+    { lab: "Filtered points", val: filt.x.length.toLocaleString("en-US") },
+    { lab: "X range", val: fmt(raw.x[0], 1) + " to " + fmt(raw.x[raw.x.length - 1], 1) },
+    { lab: "Max |raw − filt|", val: fmt(maxAbs, 4), sub: maxAt != null ? "at X " + fmt(maxAt, 2) : "" },
+    { lab: "RMS deviation", val: fmt(rms, 4) },
+  ];
+  const el = document.getElementById("tiles");
+  el.textContent = "";
+  for (const t of tiles) {
+    const div = document.createElement("div"); div.className = "tile";
+    const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = t.lab;
+    const val = document.createElement("div"); val.className = "val"; val.textContent = t.val;
+    div.append(lab, val);
+    if (t.sub) { const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = t.sub; div.appendChild(sub); }
+    el.appendChild(div);
+  }
+}
+
+function renderMeta() {
+  const meta = state.data.meta || [];
+  const card = document.getElementById("metaCard");
+  const grid = document.getElementById("metaGrid");
+  grid.textContent = "";
+  card.style.display = meta.length ? "" : "none";
+  for (const [k, v] of meta) {
+    const item = document.createElement("div");
+    const mk = document.createElement("div"); mk.className = "mk"; mk.textContent = k;
+    const mv = document.createElement("div"); mv.className = "mv"; mv.textContent = v;
+    item.append(mk, mv);
+    grid.appendChild(item);
+  }
+}
+
+function renderTable() {
+  const { raw, filt, delta, sharedGrid } = state.data;
+  const table = document.getElementById("dataTable");
+  table.textContent = "";
+  const filtLabel = sharedGrid ? "Z-Filtered" : "Z-Filtered (interp.)";
+  document.getElementById("tableNote").textContent = sharedGrid
+    ? "" : "Filtered values interpolated onto the raw X grid (the filtered series has its own grid).";
+  const thead = document.createElement("thead");
+  const trh = document.createElement("tr");
+  for (const h of ["X-Pos", "Z-Raw", filtLabel, "Δ (raw − filt)"]) {
+    const th = document.createElement("th"); th.textContent = h; trh.appendChild(th);
+  }
+  thead.appendChild(trh); table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  const deltaByX = new Map(delta.x.map((x, i) => [x, delta.z[i]]));
+  for (let i = 0; i < raw.x.length; i++) {
+    const tr = document.createElement("tr");
+    const d = deltaByX.get(raw.x[i]);
+    const fz = d != null ? raw.z[i] - d : (sharedGrid && filt.x.length === raw.x.length ? filt.z[i] : null);
+    for (const v of [fmt(raw.x[i], 3), fmt(raw.z[i], 4), fz == null ? "–" : fmt(fz, 4), d == null ? "–" : fmt(d, 4)]) {
+      const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+}
+
+/* ---------------- load ---------------- */
+
+function loadData(name, text) {
+  const err = document.getElementById("err");
+  try {
+    const data = parseFile(name, text);
+    state.data = data;
+    const xs = [data.raw.x[0], data.raw.x[data.raw.x.length - 1], data.filt.x[0], data.filt.x[data.filt.x.length - 1]];
+    state.xFull = [Math.min(...xs), Math.max(...xs)];
+    if (state.xFull[0] === state.xFull[1]) state.xFull = [state.xFull[0] - 1, state.xFull[1] + 1];
+    state.xDomain = state.xFull.slice();
+    state.hoverX = null;
+    state.show = { raw: true, filt: true };
+    document.getElementById("fileName").textContent = name;
+    document.getElementById("content").style.display = "";
+    document.getElementById("emptyState").style.display = "none";
+    document.getElementById("deltaNote").textContent = state.data.sharedGrid
+      ? "" : "filtered interpolated onto the raw X grid";
+    err.style.display = "none";
+    renderLegend(); renderTiles(); renderMeta(); renderTable(); redrawAll();
+  } catch (e) {
+    err.textContent = "Couldn't load " + name + ": " + e.message;
+    err.style.display = "block";
+  }
+}
+
+/* instrument exports are sometimes Latin-1 (e.g. "14°C" in the footer) */
+function decodeBuffer(buf) {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+  catch { return new TextDecoder("windows-1252").decode(buf); }
+}
+
+function loadFileObject(file) {
+  file.arrayBuffer().then(buf => loadData(file.name, decodeBuffer(buf)));
+}
+
+/* ---------------- wiring ---------------- */
+
+charts = [
+  makeChart("mainChart", "mainTip", mainSeries, { height: 380, endLabels: true }),
+  makeChart("deltaChart", "deltaTip", deltaSeries, { height: 190, includeZero: true }),
+];
+
+document.getElementById("openBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+document.getElementById("fileInput").addEventListener("change", e => {
+  if (e.target.files[0]) loadFileObject(e.target.files[0]);
+  e.target.value = "";
+});
+document.getElementById("resetZoomBtn").addEventListener("click", () => state.xFull && setDomain(state.xFull.slice()));
+document.getElementById("tableBtn").addEventListener("click", () => {
+  const card = document.getElementById("tableCard");
+  const open = card.style.display !== "block";
+  card.style.display = open ? "block" : "none";
+  if (open) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
+
+async function loadSample(url) {
+  const err = document.getElementById("err");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    loadData(url, decodeBuffer(await res.arrayBuffer()));
+  } catch (e) {
+    err.textContent = "Couldn't fetch " + url + " (" + e.message + "). Use Open CSV / JSON or drag a file in instead.";
+    err.style.display = "block";
+  }
+}
+
+/* drag & drop anywhere */
+let dragDepth = 0;
+document.addEventListener("dragenter", e => { e.preventDefault(); if (++dragDepth === 1) document.body.classList.add("drop-active"); });
+document.addEventListener("dragleave", e => { e.preventDefault(); if (--dragDepth === 0) document.body.classList.remove("drop-active"); });
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("drop-active");
+  if (e.dataTransfer.files[0]) loadFileObject(e.dataTransfer.files[0]);
+});
+
+window.addEventListener("resize", redrawAll);
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.data) { renderLegend(); redrawAll(); } });
+
+/* load ?file=… if given (a URL relative to the page, e.g. a raw gist) */
+const fileParam = new URLSearchParams(location.search).get("file");
+if (fileParam) loadSample(fileParam);
+</script>
+</body>
+</html>
