@@ -310,11 +310,18 @@ function parseCSV(text) {
   return out;
 }
 
-/* sort by x, drop non-finite pairs */
+/* sort by x, drop non-finite pairs and instrument dropouts */
 function cleanSeries(s) {
-  const idx = s.x.map((_, i) => i)
-    .filter(i => isFinite(s.x[i]) && isFinite(s.z[i]))
-    .sort((a, b) => s.x[a] - s.x[b]);
+  let idx = s.x.map((_, i) => i).filter(i => isFinite(s.x[i]) && isFinite(s.z[i]));
+  // dropout heuristic: exact-0 readings in a series that otherwise never goes
+  // near zero (these scans sit around Z ≈ 400–500) are missing data, not data
+  const nonZero = idx.filter(i => s.z[i] !== 0);
+  if (nonZero.length && nonZero.length < idx.length) {
+    let minAbs = Infinity;
+    for (const i of nonZero) { const a = Math.abs(s.z[i]); if (a < minAbs) minAbs = a; }
+    if (minAbs > 1) idx = nonZero;
+  }
+  idx.sort((a, b) => s.x[a] - s.x[b]);
   return { x: idx.map(i => s.x[i]), z: idx.map(i => s.z[i]) };
 }
 
