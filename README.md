@@ -11,7 +11,11 @@ the **filtered** one, plus their deviation. No build step, no dependencies: just
 Open the page and drag & drop (or pick) a scan file. Two formats are supported:
 
 - **CSV** — `;`, `,` or tab separated, with `X-Pos`, `Z-Raw`, `Z-Filtered` columns
-  (extra columns, metadata footers, and zero-padding rows are ignored)
+  (extra columns, metadata footers, and zero-padding rows are ignored).
+  In the instrument export the `X-Pos` column is the *filtered* grid, while
+  `Z-Raw` is a positional stream sampled every 0.1 mm from the scan start —
+  the "CSV raw X" control sets the step, or switches to row-aligned parsing
+  for CSVs where all columns share the `X-Pos` grid.
 - **JSON** — either `{ "arRawX": [], "arRawZ": [], "arFiltX": [], "arFiltZ": [] }`
   or an array of row objects with `X-Pos` / `Z-Raw` / `Z-Filtered` fields
 

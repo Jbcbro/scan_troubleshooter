@@ -146,6 +146,14 @@
     <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden>
     <button class="btn" id="resetZoomBtn">Reset zoom</button>
     <button class="btn" id="tableBtn">Table view</button>
+    <label class="hint" style="display:inline-flex;align-items:center;gap:6px">
+      CSV raw X:
+      <select id="rawGridMode" class="btn">
+        <option value="step" selected>uniform step</option>
+        <option value="column">X-Pos column</option>
+      </select>
+      <input id="rawGridStep" class="btn" type="number" value="0.1" step="0.05" min="0.001" style="width:76px" aria-label="raw X step in mm"> mm/pt
+    </label>
     <span class="hint">or drag &amp; drop a file anywhere · scroll = zoom · drag = pan · double-click = reset</span>
   </div>
   <div id="err"></div>
@@ -203,6 +211,8 @@ const state = {
   xFull: null,          // full [min,max]
   show: { raw: true, filt: true },
   hoverX: null,         // data-space x of crosshair, or null
+  rawGrid: { mode: "step", step: 0.1 },  // how CSV Z-Raw maps to X
+  lastName: null, lastText: null,        // last loaded file, for re-parsing
 };
 
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -292,7 +302,11 @@ function parseCSV(text) {
     return parseFloat(s);
   };
 
-  const x = [], zr = [], zf = [], meta = [];
+  // The instrument export packs two independent streams into one table:
+  // X-Pos is the FILTERED grid (non-uniform), while Z-Raw is a positional
+  // sequence sampled every 0.1 mm from the scan start. Rows of 0;0;0 are
+  // buffer padding, and the file ends with key;value metadata rows.
+  const fx = [], fz = [], rz = [], meta = [];
   for (const line of dataLines) {
     const c = line.split(sep).map(s => s.trim().replace(/^"|"$/g, ""));
     const xv = num(c[ix] || ""), rv = num(c[ir] || ""), fv = num(c[if_] || "");
@@ -301,11 +315,22 @@ function parseCSV(text) {
       if (c[0] && c[1] !== undefined && c[1] !== "") meta.push([c[0], c[1]]);
       continue;
     }
-    if (xv === 0 && rv === 0 && fv === 0) continue;    // instrument zero-padding
-    x.push(xv); zr.push(rv); zf.push(fv);
+    if (isFinite(rv)) rz.push(rv);                     // raw stream is positional
+    if (!(xv === 0 && fv === 0)) { fx.push(xv); fz.push(fv); }
   }
-  if (!x.length) throw new Error("No numeric data rows found.");
-  const out = build({ x, z: zr }, { x: x.slice(), z: zf }, true);
+  while (rz.length && rz[rz.length - 1] === 0) rz.pop();  // trailing padding
+  if (!fx.length && !rz.length) throw new Error("No numeric data rows found.");
+
+  let out;
+  if (state.rawGrid.mode === "step") {
+    const x0 = fx.length ? fx[0] : 0, step = state.rawGrid.step || 0.1;
+    const rx = rz.map((_, i) => x0 + i * step);
+    out = build({ x: rx, z: rz }, { x: fx, z: fz }, false);
+  } else {
+    // raw shares the X-Pos column (row-aligned)
+    const n = Math.min(fx.length, rz.length);
+    out = build({ x: fx.slice(0, n), z: rz.slice(0, n) }, { x: fx, z: fz }, true);
+  }
   out.meta = meta;
   return out;
 }
@@ -659,7 +684,9 @@ function renderTiles() {
   const tiles = [
     { lab: "Raw points", val: raw.x.length.toLocaleString("en-US") },
     { lab: "Filtered points", val: filt.x.length.toLocaleString("en-US") },
-    { lab: "X range", val: fmt(raw.x[0], 1) + " to " + fmt(raw.x[raw.x.length - 1], 1) },
+    { lab: "X range", val: fmt(state.xFull[0], 1) + " to " + fmt(state.xFull[1], 1),
+      sub: raw.x[raw.x.length - 1] < filt.x[filt.x.length - 1] - 1e-9
+        ? "raw ends at X " + fmt(raw.x[raw.x.length - 1], 1) : "" },
     { lab: "Max |raw − filt|", val: fmt(maxAbs, 4), sub: maxAt != null ? "at X " + fmt(maxAt, 2) : "" },
     { lab: "RMS deviation", val: fmt(rms, 4) },
   ];
@@ -723,6 +750,7 @@ function loadData(name, text) {
   const err = document.getElementById("err");
   try {
     const data = parseFile(name, text);
+    state.lastName = name; state.lastText = text;
     state.data = data;
     const xs = [data.raw.x[0], data.raw.x[data.raw.x.length - 1], data.filt.x[0], data.filt.x[data.filt.x.length - 1]];
     state.xFull = [Math.min(...xs), Math.max(...xs)];
@@ -766,6 +794,15 @@ document.getElementById("fileInput").addEventListener("change", e => {
   e.target.value = "";
 });
 document.getElementById("resetZoomBtn").addEventListener("click", () => state.xFull && setDomain(state.xFull.slice()));
+
+function updateRawGrid() {
+  state.rawGrid.mode = document.getElementById("rawGridMode").value;
+  state.rawGrid.step = parseFloat(document.getElementById("rawGridStep").value) || 0.1;
+  document.getElementById("rawGridStep").style.display = state.rawGrid.mode === "step" ? "" : "none";
+  if (state.lastText) loadData(state.lastName, state.lastText);
+}
+document.getElementById("rawGridMode").addEventListener("change", updateRawGrid);
+document.getElementById("rawGridStep").addEventListener("change", updateRawGrid);
 document.getElementById("tableBtn").addEventListener("click", () => {
   const card = document.getElementById("tableCard");
   const open = card.style.display !== "block";
