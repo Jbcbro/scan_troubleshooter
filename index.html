@@ -59,7 +59,7 @@
   .hint { color: var(--muted); font-size: 12.5px; }
 
   .drop-active::after {
-    content: "Drop CSV or JSON to load";
+    content: "Drop CSV or JSON files to load";
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: color-mix(in srgb, var(--page) 82%, transparent);
     border: 2px dashed var(--accent); border-radius: 12px;
@@ -84,7 +84,7 @@
   .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 4px; }
   .card-head .spacer { flex: 1; }
 
-  .legend { display: flex; gap: 14px; align-items: center; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
   .legend button {
     appearance: none; background: none; border: none; padding: 2px 0; cursor: pointer;
     display: inline-flex; align-items: center; gap: 7px;
@@ -93,6 +93,11 @@
   .legend .key { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; border-radius: 2px; }
   .legend button.off { opacity: 0.38; }
   .legend button.off .key { border-top-style: dotted; }
+  .legend .group { display: inline-flex; align-items: center; gap: 10px; }
+  .legend .group.boxed { border: 1px solid var(--border); border-radius: 8px; padding: 3px 9px; }
+  .legend .fname { font-size: 12px; font-weight: 650; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend .rm { color: var(--muted); font-size: 12px; padding: 0 2px; }
+  .legend .rm:hover { color: #d03b3b; }
 
   .chart-box { position: relative; }
   .chart-box canvas { display: block; width: 100%; touch-action: none; cursor: crosshair; border-radius: 6px; }
@@ -143,7 +148,7 @@
 
   <div class="controls">
     <button class="btn primary" id="openBtn">Open CSV / JSON…</button>
-    <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden>
+    <input type="file" id="fileInput" accept=".csv,.json,.txt" hidden multiple>
     <button class="btn" id="resetZoomBtn">Reset zoom</button>
     <button class="btn" id="tableBtn">Table view</button>
     <label class="hint" style="display:inline-flex;align-items:center;gap:6px">
@@ -154,7 +159,7 @@
       </select>
       <input id="rawGridStep" class="btn" type="number" value="0.1" step="0.05" min="0.001" style="width:76px" aria-label="raw X step in mm"> mm/pt
     </label>
-    <span class="hint">or drag &amp; drop a file anywhere · scroll = zoom · drag = pan · double-click = reset</span>
+    <span class="hint">or drag &amp; drop files anywhere (several at once to compare) · scroll = zoom · drag = pan · double-click = reset</span>
   </div>
   <div id="err"></div>
 
@@ -187,17 +192,17 @@
     </div>
 
     <div class="card" id="metaCard" style="display:none">
-      <div class="card-head"><h2>Scan parameters</h2><div class="spacer"></div><span class="hint">from the file footer</span></div>
+      <div class="card-head"><h2>Scan parameters</h2><div class="spacer"></div><span class="hint">from the file</span></div>
       <div class="meta-grid" id="metaGrid"></div>
     </div>
 
     <div class="card" id="tableCard">
-      <div class="card-head"><h2>Data table</h2><div class="spacer"></div><span class="hint" id="tableNote"></span></div>
+      <div class="card-head"><h2>Data table</h2><select id="tableFile" class="btn" style="display:none"></select><div class="spacer"></div><span class="hint" id="tableNote"></span></div>
       <div class="table-scroll"><table id="dataTable"></table></div>
     </div>
   </div>
 
-  <div id="emptyState">Open a scan file to get started — a CSV with <b>X&#8209;Pos / Z&#8209;Raw / Z&#8209;Filtered</b> columns,<br>or a JSON with <b>arRawX / arRawZ / arFiltX / arFiltZ</b> arrays.</div>
+  <div id="emptyState">Open a scan file to get started — a CSV with <b>X&#8209;Pos / Z&#8209;Raw / Z&#8209;Filtered</b> columns,<br>a JSON with <b>arRawX / arRawZ / arFiltX / arFiltZ</b> arrays, or an app <b>bug report</b> JSON.<br>Load several files to compare them.</div>
 </div>
 
 <script>
@@ -206,14 +211,28 @@
 /* ---------------- state ---------------- */
 
 const state = {
-  data: null,           // { raw:{x,z}, filt:{x,z}, delta:{x,z}, sharedGrid:bool }
+  datasets: [],         // [{ name, label, text, ci, data:{raw,filt,delta,sharedGrid,meta}, show:{raw,filt} }]
   xDomain: null,        // current [min,max] view (shared by both charts)
   xFull: null,          // full [min,max]
-  show: { raw: true, filt: true },
   hoverX: null,         // data-space x of crosshair, or null
   rawGrid: { mode: "step", step: 0.1 },  // how CSV Z-Raw maps to X
-  lastName: null, lastText: null,        // last loaded file, for re-parsing
+  tableIdx: 0,          // which dataset the table shows
 };
+
+/* per-file colors when comparing several files (first two match the classic raw/filt hues) */
+const PALETTE = {
+  light: ["#2a78d6", "#eb6834", "#2f9e57", "#b3348f", "#8a6d1c", "#7048c9", "#0e9bad", "#d0433b"],
+  dark:  ["#3987e5", "#d95926", "#3fb26a", "#d24fae", "#c0a02c", "#9085e9", "#2fb3c4", "#e05a52"],
+};
+const paletteColor = i =>
+  (window.matchMedia("(prefers-color-scheme: dark)").matches ? PALETTE.dark : PALETTE.light)[i % PALETTE.light.length];
+
+/* single file: classic raw/filt/delta colors; several files: one color per file */
+function seriesColor(ds, kind) {
+  if (state.datasets.length === 1)
+    return css(kind === "raw" ? "--series-raw" : kind === "filt" ? "--series-filt" : "--series-delta");
+  return paletteColor(ds.ci);
+}
 
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fmt = (v, d) => v == null || !isFinite(v) ? "–" : v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -229,26 +248,66 @@ function parseFile(name, text) {
 
 const normKey = s => String(s).toLowerCase().replace(/[^a-z]/g, "");
 
+/* find { arRawX, arRawZ, arFiltX, arFiltZ } anywhere in the object (key match is
+   fuzzy) — bug report exports nest them under data.getscanData */
+function findScanArrays(obj, depth = 0) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj) || depth > 4) return null;
+  const keys = Object.keys(obj);
+  const find = (part, axis) => keys.find(k => {
+    const n = normKey(k);
+    return n.includes(part) && n.endsWith(axis) && Array.isArray(obj[k]);
+  });
+  const rx = find("raw", "x"), rz = find("raw", "z") || find("raw", "y");
+  const fx = find("filt", "x"), fz = find("filt", "z") || find("filt", "y");
+  if (rx && rz && fx && fz) return { rx: obj[rx], rz: obj[rz], fx: obj[fx], fz: obj[fz] };
+  for (const k of keys) {
+    const r = findScanArrays(obj[k], depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+/* key/value metadata from a bug report wrapper */
+function bugReportMeta(obj) {
+  const meta = [];
+  const add = (k, v) => { if (v != null && v !== "" && v !== "(No description provided)") meta.push([k, String(v)]); };
+  add("Description", obj.description);
+  add("App version", obj.appVersion);
+  add("Device", obj.deviceName);
+  add("Reported", obj.timestamp);
+  const d = obj.data || {};
+  if (d.dataSource) {
+    add("Data source", d.dataSource.description || d.dataSource.type);
+    add("Scan time", d.dataSource.timestamp);
+  }
+  if (d.getscanData && d.getscanData.__source) add("Scan source", d.getscanData.__source);
+  if (Array.isArray(d.filteredOutput) && d.filteredOutput.length)
+    add("filteredOutput", d.filteredOutput.length + " pts (no X grid — not plotted)");
+  return meta;
+}
+
 function parseJSON(text) {
   let obj;
   try { obj = JSON.parse(text); } catch (e) { throw new Error("Not valid JSON: " + e.message); }
 
-  // Form 1: { arRawX, arRawZ, arFiltX, arFiltZ } (key match is fuzzy)
+  // Form 1: { arRawX, arRawZ, arFiltX, arFiltZ } — at the top level or nested
+  // (e.g. a bug report export with data.getscanData). Zero-padded tails in the
+  // arrays are dropped by the exact-zero dropout heuristic in cleanSeries.
   if (obj && !Array.isArray(obj) && typeof obj === "object") {
-    const keys = Object.keys(obj);
-    const find = (part, axis) => keys.find(k => {
-      const n = normKey(k);
-      return n.includes(part) && n.endsWith(axis) && Array.isArray(obj[k]);
-    });
-    const rx = find("raw", "x"), rz = find("raw", "z") || find("raw", "y");
-    const fx = find("filt", "x"), fz = find("filt", "z") || find("filt", "y");
-    if (rx && rz && fx && fz) {
-      return build(
-        { x: obj[rx].map(Number), z: obj[rz].map(Number) },
-        { x: obj[fx].map(Number), z: obj[fz].map(Number) }
+    const arrs = findScanArrays(obj);
+    if (arrs) {
+      const out = build(
+        { x: arrs.rx.map(Number), z: arrs.rz.map(Number) },
+        { x: arrs.fx.map(Number), z: arrs.fz.map(Number) }
       );
+      const meta = bugReportMeta(obj);
+      if (meta.length) out.meta = meta;
+      // a bug report's description is the best display name for the dataset
+      if (obj.description && obj.description !== "(No description provided)")
+        out.labelHint = String(obj.description);
+      return out;
     }
-    throw new Error("JSON object found, but not the expected arRawX / arRawZ / arFiltX / arFiltZ arrays.");
+    throw new Error("JSON object found, but no arRawX / arRawZ / arFiltX / arFiltZ arrays (looked at nested objects too).");
   }
 
   // Form 2: array of row objects, e.g. [{ "X-Pos":…, "Z-Raw":…, "Z-Filtered":… }, …]
@@ -408,7 +467,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
   };
 
   function draw() {
-    if (!state.data || !state.xDomain) return;
+    if (!state.datasets.length || !state.xDomain) return;
     const w = canvas.clientWidth, dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(H * dpr)) {
       canvas.width = Math.round(w * dpr); canvas.height = Math.round(H * dpr);
@@ -471,6 +530,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
     for (const s of series) {
       const xs = s.data.x, zs = s.data.z;
       ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+      ctx.setLineDash(s.dash || []);
       ctx.beginPath();
       let started = false;
       const i0 = Math.max(0, nearestIdx(xs, xa) - 1), i1 = Math.min(xs.length - 1, nearestIdx(xs, xb) + 1);
@@ -480,6 +540,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
       }
       ctx.stroke();
     }
+    ctx.setLineDash([]);
     ctx.restore();
 
     // endpoint direct labels (ink text + short colored key)
@@ -519,7 +580,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
   }
 
   function showTip() {
-    if (state.hoverX == null || !state.data) { tip.style.display = "none"; return; }
+    if (state.hoverX == null || !state.datasets.length) { tip.style.display = "none"; return; }
     const [xa, xb] = state.xDomain;
     if (state.hoverX < xa || state.hoverX > xb) { tip.style.display = "none"; return; }
     const series = getSeries().filter(s => s.visible);
@@ -550,12 +611,12 @@ function makeChart(canvasId, tipId, getSeries, opts) {
   /* interaction: crosshair, wheel zoom, drag pan, dblclick reset, arrow keys */
   let dragging = null;
   canvas.addEventListener("pointerdown", e => {
-    if (!state.data) return;
+    if (!state.datasets.length) return;
     dragging = { px: e.clientX, dom: state.xDomain.slice() };
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", e => {
-    if (!state.data) return;
+    if (!state.datasets.length) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     if (dragging) {
@@ -576,7 +637,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
   canvas.addEventListener("pointerleave", () => { if (!dragging) { state.hoverX = null; redrawAll(); } });
   canvas.addEventListener("dblclick", () => state.xFull && setDomain(state.xFull.slice()));
   canvas.addEventListener("wheel", e => {
-    if (!state.data) return;
+    if (!state.datasets.length) return;
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const fx = pxToX(e.clientX - rect.left);
@@ -585,7 +646,7 @@ function makeChart(canvasId, tipId, getSeries, opts) {
     setDomain([fx + (a - fx) * f, fx + (b - fx) * f], true);
   }, { passive: false });
   canvas.addEventListener("keydown", e => {
-    if (!state.data) return;
+    if (!state.datasets.length) return;
     const s = getSeries().find(v => v.visible); if (!s) return;
     const xs = s.data.x;
     let i = state.hoverX == null ? Math.floor(xs.length / 2) : nearestIdx(xs, state.hoverX);
@@ -637,88 +698,165 @@ function redrawAll() {
 
 /* ---------------- UI assembly ---------------- */
 
-const SERIES_DEFS = [
-  { id: "raw",  name: "Raw",      cssVar: "--series-raw" },
-  { id: "filt", name: "Filtered", cssVar: "--series-filt" },
+const KINDS = [
+  { id: "raw",  name: "Raw" },
+  { id: "filt", name: "Filtered" },
 ];
+const multi = () => state.datasets.length > 1;
 
+/* several files: raw solid, filtered dashed, one color per file */
 function mainSeries() {
-  return SERIES_DEFS.map(d => ({
-    name: d.name, color: css(d.cssVar),
-    data: state.data[d.id], visible: state.show[d.id],
-  }));
+  const out = [];
+  for (const ds of state.datasets) {
+    for (const k of KINDS) {
+      out.push({
+        name: multi() ? `${ds.label} ${k.name.toLowerCase()}` : k.name,
+        color: seriesColor(ds, k.id),
+        dash: multi() && k.id === "filt" ? [6, 4] : null,
+        data: ds.data[k.id], visible: ds.show[k.id],
+      });
+    }
+  }
+  return out;
 }
 function deltaSeries() {
-  return [{ name: "Raw − Filtered", color: css("--series-delta"), data: state.data.delta, visible: true }];
+  return state.datasets.map(ds => ({
+    name: multi() ? ds.label : "Raw − Filtered",
+    color: seriesColor(ds, "delta"),
+    data: ds.data.delta, visible: ds.show.raw || ds.show.filt,
+  }));
 }
 
 function renderLegend() {
   const el = document.getElementById("legend");
   el.textContent = "";
-  for (const d of SERIES_DEFS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = state.show[d.id] ? "" : "off";
-    btn.setAttribute("aria-pressed", String(state.show[d.id]));
-    const key = document.createElement("span"); key.className = "key"; key.style.borderTopColor = css(d.cssVar);
-    const label = document.createElement("span");
-    label.textContent = `${d.name} (${state.data[d.id].x.length.toLocaleString("en-US")} pts)`;
-    btn.append(key, label);
-    btn.addEventListener("click", () => {
-      state.show[d.id] = !state.show[d.id];
-      renderLegend(); redrawAll();
-    });
-    el.appendChild(btn);
-  }
+  state.datasets.forEach((ds, di) => {
+    const group = document.createElement("span");
+    group.className = multi() ? "group boxed" : "group";
+    if (multi()) {
+      const name = document.createElement("span");
+      name.className = "fname";
+      name.style.color = seriesColor(ds, "raw");
+      name.textContent = ds.label;
+      name.title = ds.name;
+      group.appendChild(name);
+    }
+    for (const k of KINDS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = ds.show[k.id] ? "" : "off";
+      btn.setAttribute("aria-pressed", String(ds.show[k.id]));
+      const key = document.createElement("span"); key.className = "key";
+      key.style.borderTopColor = seriesColor(ds, k.id);
+      if (multi() && k.id === "filt") key.style.borderTopStyle = "dashed";
+      const label = document.createElement("span");
+      label.textContent = multi()
+        ? k.name
+        : `${k.name} (${ds.data[k.id].x.length.toLocaleString("en-US")} pts)`;
+      btn.append(key, label);
+      btn.addEventListener("click", () => {
+        ds.show[k.id] = !ds.show[k.id];
+        renderLegend(); redrawAll();
+      });
+      group.appendChild(btn);
+    }
+    if (multi()) {
+      const rm = document.createElement("button");
+      rm.type = "button"; rm.className = "rm"; rm.textContent = "✕";
+      rm.title = "Remove " + ds.name;
+      rm.setAttribute("aria-label", "Remove " + ds.name);
+      rm.addEventListener("click", () => removeDataset(di));
+      group.appendChild(rm);
+    }
+    el.appendChild(group);
+  });
 }
 
-function renderTiles() {
-  const { raw, filt, delta } = state.data;
+function deltaStats(delta) {
   let maxAbs = 0, maxAt = null, sum2 = 0;
   for (let i = 0; i < delta.z.length; i++) {
     const a = Math.abs(delta.z[i]);
     if (a > maxAbs) { maxAbs = a; maxAt = delta.x[i]; }
     sum2 += delta.z[i] * delta.z[i];
   }
-  const rms = delta.z.length ? Math.sqrt(sum2 / delta.z.length) : NaN;
-  const tiles = [
-    { lab: "Raw points", val: raw.x.length.toLocaleString("en-US") },
-    { lab: "Filtered points", val: filt.x.length.toLocaleString("en-US") },
-    { lab: "X range", val: fmt(state.xFull[0], 1) + " to " + fmt(state.xFull[1], 1),
-      sub: raw.x[raw.x.length - 1] < filt.x[filt.x.length - 1] - 1e-9
-        ? "raw ends at X " + fmt(raw.x[raw.x.length - 1], 1) : "" },
-    { lab: "Max |raw − filt|", val: fmt(maxAbs, 4), sub: maxAt != null ? "at X " + fmt(maxAt, 2) : "" },
-    { lab: "RMS deviation", val: fmt(rms, 4) },
-  ];
+  return { maxAbs, maxAt, rms: delta.z.length ? Math.sqrt(sum2 / delta.z.length) : NaN };
+}
+
+function renderTiles() {
+  let tiles;
+  if (!multi()) {
+    const { raw, filt, delta } = state.datasets[0].data;
+    const { maxAbs, maxAt, rms } = deltaStats(delta);
+    tiles = [
+      { lab: "Raw points", val: raw.x.length.toLocaleString("en-US") },
+      { lab: "Filtered points", val: filt.x.length.toLocaleString("en-US") },
+      { lab: "X range", val: fmt(state.xFull[0], 1) + " to " + fmt(state.xFull[1], 1),
+        sub: raw.x[raw.x.length - 1] < filt.x[filt.x.length - 1] - 1e-9
+          ? "raw ends at X " + fmt(raw.x[raw.x.length - 1], 1) : "" },
+      { lab: "Max |raw − filt|", val: fmt(maxAbs, 4), sub: maxAt != null ? "at X " + fmt(maxAt, 2) : "" },
+      { lab: "RMS deviation", val: fmt(rms, 4) },
+    ];
+  } else {
+    // one tile per file: max |Δ| headline, RMS and point counts underneath
+    tiles = state.datasets.map(ds => {
+      const { maxAbs, maxAt, rms } = deltaStats(ds.data.delta);
+      return {
+        lab: ds.label, color: seriesColor(ds, "raw"),
+        val: fmt(maxAbs, 4),
+        sub: `max |Δ|${maxAt != null ? " at X " + fmt(maxAt, 2) : ""} · RMS ${fmt(rms, 4)}`,
+        sub2: `raw ${ds.data.raw.x.length.toLocaleString("en-US")} / filt ${ds.data.filt.x.length.toLocaleString("en-US")} pts`,
+      };
+    });
+  }
   const el = document.getElementById("tiles");
   el.textContent = "";
   for (const t of tiles) {
     const div = document.createElement("div"); div.className = "tile";
     const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = t.lab;
+    if (t.color) lab.style.color = t.color;
     const val = document.createElement("div"); val.className = "val"; val.textContent = t.val;
     div.append(lab, val);
     if (t.sub) { const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = t.sub; div.appendChild(sub); }
+    if (t.sub2) { const sub = document.createElement("div"); sub.className = "sub"; sub.textContent = t.sub2; div.appendChild(sub); }
     el.appendChild(div);
   }
 }
 
 function renderMeta() {
-  const meta = state.data.meta || [];
   const card = document.getElementById("metaCard");
   const grid = document.getElementById("metaGrid");
   grid.textContent = "";
-  card.style.display = meta.length ? "" : "none";
-  for (const [k, v] of meta) {
-    const item = document.createElement("div");
-    const mk = document.createElement("div"); mk.className = "mk"; mk.textContent = k;
-    const mv = document.createElement("div"); mv.className = "mv"; mv.textContent = v;
-    item.append(mk, mv);
-    grid.appendChild(item);
+  const withMeta = state.datasets.filter(ds => (ds.data.meta || []).length);
+  card.style.display = withMeta.length ? "" : "none";
+  for (const ds of withMeta) {
+    if (multi()) {
+      const h = document.createElement("div");
+      h.className = "mk"; h.style.gridColumn = "1 / -1"; h.style.marginTop = "6px";
+      h.style.color = seriesColor(ds, "raw");
+      h.textContent = ds.label;
+      grid.appendChild(h);
+    }
+    for (const [k, v] of ds.data.meta) {
+      const item = document.createElement("div");
+      const mk = document.createElement("div"); mk.className = "mk"; mk.textContent = k;
+      const mv = document.createElement("div"); mv.className = "mv"; mv.textContent = v;
+      item.append(mk, mv);
+      grid.appendChild(item);
+    }
   }
 }
 
 function renderTable() {
-  const { raw, filt, delta, sharedGrid } = state.data;
+  const sel = document.getElementById("tableFile");
+  sel.style.display = multi() ? "" : "none";
+  sel.textContent = "";
+  state.tableIdx = Math.min(state.tableIdx, state.datasets.length - 1);
+  state.datasets.forEach((ds, i) => {
+    const opt = document.createElement("option");
+    opt.value = i; opt.textContent = ds.label; opt.selected = i === state.tableIdx;
+    sel.appendChild(opt);
+  });
+  const { raw, filt, delta, sharedGrid } = state.datasets[state.tableIdx].data;
   const table = document.getElementById("dataTable");
   table.textContent = "";
   const filtLabel = sharedGrid ? "Z-Filtered" : "Z-Filtered (interp.)";
@@ -746,29 +884,55 @@ function renderTable() {
 
 /* ---------------- load ---------------- */
 
-function loadData(name, text) {
-  const err = document.getElementById("err");
-  try {
-    const data = parseFile(name, text);
-    state.lastName = name; state.lastText = text;
-    state.data = data;
-    const xs = [data.raw.x[0], data.raw.x[data.raw.x.length - 1], data.filt.x[0], data.filt.x[data.filt.x.length - 1]];
-    state.xFull = [Math.min(...xs), Math.max(...xs)];
-    if (state.xFull[0] === state.xFull[1]) state.xFull = [state.xFull[0] - 1, state.xFull[1] + 1];
-    state.xDomain = state.xFull.slice();
-    state.hoverX = null;
-    state.show = { raw: true, filt: true };
-    document.getElementById("fileName").textContent = name;
-    document.getElementById("content").style.display = "";
-    document.getElementById("emptyState").style.display = "none";
-    document.getElementById("deltaNote").textContent = state.data.sharedGrid
-      ? "" : "filtered interpolated onto the raw X grid";
-    err.style.display = "none";
-    renderLegend(); renderTiles(); renderMeta(); renderTable(); redrawAll();
-  } catch (e) {
-    err.textContent = "Couldn't load " + name + ": " + e.message;
-    err.style.display = "block";
+/* short display label: basename without extension */
+function dsLabel(name) {
+  return name.split("/").pop().replace(/\.[^.]+$/, "");
+}
+
+const nextColorIdx = () => {
+  const used = new Set(state.datasets.map(d => d.ci));
+  let i = 0; while (used.has(i)) i++;
+  return i;
+};
+
+/* parse and add one file to the comparison (throws on parse errors) */
+function addDataset(name, text) {
+  const data = parseFile(name, text);
+  state.datasets.push({
+    name, label: data.labelHint || dsLabel(name), text, ci: nextColorIdx(),
+    data, show: { raw: true, filt: true },
+  });
+}
+
+function removeDataset(i) {
+  state.datasets.splice(i, 1);
+  refresh();
+}
+
+/* recompute the shared X extent and re-render everything */
+function refresh() {
+  const has = state.datasets.length > 0;
+  document.getElementById("content").style.display = has ? "" : "none";
+  document.getElementById("emptyState").style.display = has ? "none" : "";
+  document.getElementById("fileName").textContent = state.datasets.map(d => d.name).join(" · ");
+  if (!has) { state.xFull = state.xDomain = null; state.hoverX = null; return; }
+  const xs = [];
+  for (const ds of state.datasets) {
+    for (const s of [ds.data.raw, ds.data.filt]) xs.push(s.x[0], s.x[s.x.length - 1]);
   }
+  state.xFull = [Math.min(...xs), Math.max(...xs)];
+  if (state.xFull[0] === state.xFull[1]) state.xFull = [state.xFull[0] - 1, state.xFull[1] + 1];
+  state.xDomain = state.xFull.slice();
+  state.hoverX = null;
+  document.getElementById("deltaNote").textContent = state.datasets.every(ds => ds.data.sharedGrid)
+    ? "" : "filtered interpolated onto the raw X grid";
+  renderLegend(); renderTiles(); renderMeta(); renderTable(); redrawAll();
+}
+
+function showErrors(errs) {
+  const err = document.getElementById("err");
+  err.textContent = errs.join(" — ");
+  err.style.display = errs.length ? "block" : "none";
 }
 
 /* instrument exports are sometimes Latin-1 (e.g. "14°C" in the footer) */
@@ -777,8 +941,14 @@ function decodeBuffer(buf) {
   catch { return new TextDecoder("windows-1252").decode(buf); }
 }
 
-function loadFileObject(file) {
-  file.arrayBuffer().then(buf => loadData(file.name, decodeBuffer(buf)));
+async function loadFileObjects(files) {
+  const errs = [];
+  for (const f of files) {
+    try { addDataset(f.name, decodeBuffer(await f.arrayBuffer())); }
+    catch (e) { errs.push("Couldn't load " + f.name + ": " + e.message); }
+  }
+  showErrors(errs);
+  refresh();
 }
 
 /* ---------------- wiring ---------------- */
@@ -790,7 +960,7 @@ charts = [
 
 document.getElementById("openBtn").addEventListener("click", () => document.getElementById("fileInput").click());
 document.getElementById("fileInput").addEventListener("change", e => {
-  if (e.target.files[0]) loadFileObject(e.target.files[0]);
+  if (e.target.files.length) loadFileObjects([...e.target.files]);
   e.target.value = "";
 });
 document.getElementById("resetZoomBtn").addEventListener("click", () => state.xFull && setDomain(state.xFull.slice()));
@@ -799,7 +969,14 @@ function updateRawGrid() {
   state.rawGrid.mode = document.getElementById("rawGridMode").value;
   state.rawGrid.step = parseFloat(document.getElementById("rawGridStep").value) || 0.1;
   document.getElementById("rawGridStep").style.display = state.rawGrid.mode === "step" ? "" : "none";
-  if (state.lastText) loadData(state.lastName, state.lastText);
+  // re-parse every loaded file with the new grid settings, keeping visibility
+  const errs = [];
+  for (const ds of state.datasets) {
+    try { const show = ds.show; ds.data = parseFile(ds.name, ds.text); ds.show = show; }
+    catch (e) { errs.push("Couldn't re-parse " + ds.name + ": " + e.message); }
+  }
+  showErrors(errs);
+  if (state.datasets.length) refresh();
 }
 document.getElementById("rawGridMode").addEventListener("change", updateRawGrid);
 document.getElementById("rawGridStep").addEventListener("change", updateRawGrid);
@@ -810,16 +987,19 @@ document.getElementById("tableBtn").addEventListener("click", () => {
   if (open) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
-async function loadSample(url) {
-  const err = document.getElementById("err");
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    loadData(url, decodeBuffer(await res.arrayBuffer()));
-  } catch (e) {
-    err.textContent = "Couldn't fetch " + url + " (" + e.message + "). Use Open CSV / JSON or drag a file in instead.";
-    err.style.display = "block";
+async function loadSamples(urls) {
+  const errs = [];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      addDataset(url, decodeBuffer(await res.arrayBuffer()));
+    } catch (e) {
+      errs.push("Couldn't fetch " + url + " (" + e.message + "). Use Open CSV / JSON or drag a file in instead.");
+    }
   }
+  showErrors(errs);
+  refresh();
 }
 
 /* drag & drop anywhere */
@@ -829,15 +1009,21 @@ document.addEventListener("dragleave", e => { e.preventDefault(); if (--dragDept
 document.addEventListener("dragover", e => e.preventDefault());
 document.addEventListener("drop", e => {
   e.preventDefault(); dragDepth = 0; document.body.classList.remove("drop-active");
-  if (e.dataTransfer.files[0]) loadFileObject(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) loadFileObjects([...e.dataTransfer.files]);
 });
 
 window.addEventListener("resize", redrawAll);
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.data) { renderLegend(); redrawAll(); } });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.datasets.length) { renderLegend(); redrawAll(); } });
 
-/* load ?file=… if given (a URL relative to the page, e.g. a raw gist) */
-const fileParam = new URLSearchParams(location.search).get("file");
-if (fileParam) loadSample(fileParam);
+document.getElementById("tableFile").addEventListener("change", e => {
+  state.tableIdx = Number(e.target.value) || 0;
+  renderTable();
+});
+
+/* load ?file=… if given — repeat the parameter to load several
+   (URLs relative to the page, e.g. raw gists) */
+const fileParams = new URLSearchParams(location.search).getAll("file");
+if (fileParams.length) loadSamples(fileParams);
 </script>
 </body>
 </html>

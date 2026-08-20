@@ -8,7 +8,9 @@ the **filtered** one, plus their deviation. No build step, no dependencies: just
 
 ## Usage
 
-Open the page and drag & drop (or pick) a scan file. Two formats are supported:
+Open the page and drag & drop (or pick) one or more scan files — loading several
+compares them in the same charts (one color per file, raw solid / filtered dashed,
+with per-file toggles and remove buttons in the legend). Three formats are supported:
 
 - **CSV** — `;`, `,` or tab separated, with `X-Pos`, `Z-Raw`, `Z-Filtered` columns
   (extra columns, metadata footers, and zero-padding rows are ignored).
@@ -18,9 +20,13 @@ Open the page and drag & drop (or pick) a scan file. Two formats are supported:
   for CSVs where all columns share the `X-Pos` grid.
 - **JSON** — either `{ "arRawX": [], "arRawZ": [], "arFiltX": [], "arFiltZ": [] }`
   or an array of row objects with `X-Pos` / `Z-Raw` / `Z-Filtered` fields
+- **Bug report JSON** — app bug report exports with the arrays nested under
+  `data.getscanData` (zero-padded tails are dropped as instrument dropout, and the
+  report metadata — app version, data source, timestamps — shows in the
+  Scan parameters card)
 
-You can also load a file by URL parameter: `index.html?file=<url>` (same-origin
-or CORS-enabled, e.g. a raw gist).
+You can also load files by URL parameter: `index.html?file=<url>` — repeat the
+parameter to load several (same-origin or CORS-enabled, e.g. a raw gist).
 
 ### Charts
 
