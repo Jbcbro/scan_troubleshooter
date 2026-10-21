@@ -168,7 +168,7 @@
 
     <div class="card">
       <div class="card-head">
-        <h2>Profile — raw vs filtered (Z over X position)</h2>
+        <h2 id="mainTitle">Profile — raw vs filtered (Z over X position)</h2>
         <div class="spacer"></div>
         <div class="legend" id="legend"></div>
       </div>
@@ -179,7 +179,7 @@
       <div class="zoomhint" id="zoomInfo"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="deltaCard">
       <div class="card-head">
         <h2>Deviation — raw &minus; filtered</h2>
         <div class="spacer"></div>
@@ -202,7 +202,7 @@
     </div>
   </div>
 
-  <div id="emptyState">Open a scan file to get started — a CSV with <b>X&#8209;Pos / Z&#8209;Raw / Z&#8209;Filtered</b> columns,<br>a JSON with <b>arRawX / arRawZ / arFiltX / arFiltZ</b> arrays, or an app <b>bug report</b> JSON.<br>Load several files to compare them.</div>
+  <div id="emptyState">Open a scan file to get started — a CSV with <b>X&#8209;Pos / Z&#8209;Raw / Z&#8209;Filtered</b> (or a single <b>X&#8209;Pos / Z&#8209;Pos</b> profile) columns,<br>a JSON with <b>arRawX / arRawZ / arFiltX / arFiltZ</b> arrays, or an app <b>bug report</b> JSON.<br>Load several files to compare them.</div>
 </div>
 
 <script>
@@ -342,17 +342,14 @@ function parseCSV(text) {
   const headers = looksLikeHeader ? cells0 : cells0.map((_, i) => "col" + i);
   const dataLines = looksLikeHeader ? lines.slice(1) : lines;
 
-  let ix = -1, ir = -1, if_ = -1;
+  let ix = -1, ir = -1, if_ = -1, iz = -1;
   headers.forEach((h, i) => {
     const n = normKey(h);
     if (ix < 0 && (n === "x" || n.startsWith("xpos"))) ix = i;
     if (ir < 0 && n.includes("raw")) ir = i;
     if (if_ < 0 && n.includes("filt")) if_ = i;
+    if (iz < 0 && (n === "z" || n.startsWith("zpos"))) iz = i;
   });
-  if (ix < 0 || ir < 0 || if_ < 0) {
-    if (headers.length >= 3 && !looksLikeHeader) { ix = 0; ir = 1; if_ = 2; }
-    else throw new Error("Couldn't find X-Pos / Z-Raw / Z-Filtered columns. Headers found: " + headers.join(", "));
-  }
 
   // decimal commas only make sense when comma is NOT the column separator
   const num = s => {
@@ -360,6 +357,16 @@ function parseCSV(text) {
     if (sep !== "," && s.includes(",") && !s.includes(".")) s = s.replace(",", ".");
     return parseFloat(s);
   };
+
+  // single-profile export (e.g. HYUNDAI.csv): X-pos;Z-pos with no raw/filtered
+  // split, so there is nothing to compare against
+  if (ir < 0 && if_ < 0 && (ix >= 0 && iz >= 0 || headers.length === 2 && !looksLikeHeader))
+    return parseProfileCSV(dataLines, sep, num, ix >= 0 ? ix : 0, iz >= 0 ? iz : 1);
+
+  if (ix < 0 || ir < 0 || if_ < 0) {
+    if (headers.length >= 3 && !looksLikeHeader) { ix = 0; ir = 1; if_ = 2; }
+    else throw new Error("Couldn't find X-Pos / Z-Raw / Z-Filtered (or X-Pos / Z-Pos) columns. Headers found: " + headers.join(", "));
+  }
 
   // The instrument export packs two independent streams into one table:
   // X-Pos is the FILTERED grid (non-uniform), while Z-Raw is a positional
@@ -394,6 +401,26 @@ function parseCSV(text) {
   return out;
 }
 
+/* X-pos;Z-pos profile: one series on its own X grid. The tail is 0.0 rows on a
+   0.1 mm grid (buffer padding, dropped by cleanSeries) followed by key;value
+   machine settings (Entry Mode, Rpm At Start, Laser Start Position, …). */
+function parseProfileCSV(dataLines, sep, num, ix, iz) {
+  const x = [], z = [], meta = [];
+  for (const line of dataLines) {
+    const c = line.split(sep).map(s => s.trim().replace(/^"|"$/g, ""));
+    const xv = num(c[ix] || ""), zv = num(c[iz] || "");
+    if (!isFinite(xv)) {
+      if (c[0] && c[1] !== undefined && c[1] !== "") meta.push([c[0], c[1]]);
+      continue;
+    }
+    if (isFinite(zv)) { x.push(xv); z.push(zv); }
+  }
+  if (!x.length) throw new Error("No numeric data rows found.");
+  const out = buildProfile({ x, z });
+  out.meta = meta;
+  return out;
+}
+
 /* sort by x, drop non-finite pairs and instrument dropouts */
 function cleanSeries(s) {
   let idx = s.x.map((_, i) => i).filter(i => isFinite(s.x[i]) && isFinite(s.z[i]));
@@ -420,6 +447,13 @@ function build(raw, filt, sharedGrid = false) {
     if (fz != null) { dx.push(raw.x[i]); dz.push(raw.z[i] - fz); }
   }
   return { raw, filt, delta: { x: dx, z: dz }, sharedGrid };
+}
+
+/* profile-only dataset: the series lives in `raw`, with no filtered or delta */
+function buildProfile(profile) {
+  const raw = cleanSeries(profile);
+  if (!raw.x.length) throw new Error("The profile has no valid points.");
+  return { raw, filt: null, delta: { x: [], z: [] }, sharedGrid: true, profileOnly: true };
 }
 
 function interp(s, xv) {
@@ -702,13 +736,16 @@ const KINDS = [
   { id: "raw",  name: "Raw" },
   { id: "filt", name: "Filtered" },
 ];
+const PROFILE_KINDS = [{ id: "raw", name: "Profile" }];
+const kindsFor = ds => ds.data.profileOnly ? PROFILE_KINDS : KINDS;
 const multi = () => state.datasets.length > 1;
+const allProfileOnly = () => state.datasets.every(ds => ds.data.profileOnly);
 
 /* several files: raw solid, filtered dashed, one color per file */
 function mainSeries() {
   const out = [];
   for (const ds of state.datasets) {
-    for (const k of KINDS) {
+    for (const k of kindsFor(ds)) {
       out.push({
         name: multi() ? `${ds.label} ${k.name.toLowerCase()}` : k.name,
         color: seriesColor(ds, k.id),
@@ -720,7 +757,7 @@ function mainSeries() {
   return out;
 }
 function deltaSeries() {
-  return state.datasets.map(ds => ({
+  return state.datasets.filter(ds => !ds.data.profileOnly).map(ds => ({
     name: multi() ? ds.label : "Raw − Filtered",
     color: seriesColor(ds, "delta"),
     data: ds.data.delta, visible: ds.show.raw || ds.show.filt,
@@ -741,7 +778,7 @@ function renderLegend() {
       name.title = ds.name;
       group.appendChild(name);
     }
-    for (const k of KINDS) {
+    for (const k of kindsFor(ds)) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = ds.show[k.id] ? "" : "off";
@@ -782,9 +819,24 @@ function deltaStats(delta) {
   return { maxAbs, maxAt, rms: delta.z.length ? Math.sqrt(sum2 / delta.z.length) : NaN };
 }
 
+function zRange(s) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of s.z) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  return [lo, hi];
+}
+
 function renderTiles() {
   let tiles;
-  if (!multi()) {
+  if (!multi() && state.datasets[0].data.profileOnly) {
+    const { raw } = state.datasets[0].data;
+    const [zlo, zhi] = zRange(raw);
+    tiles = [
+      { lab: "Profile points", val: raw.x.length.toLocaleString("en-US") },
+      { lab: "X range", val: fmt(raw.x[0], 1) + " to " + fmt(raw.x[raw.x.length - 1], 1) },
+      { lab: "Z range", val: fmt(zlo, 3) + " to " + fmt(zhi, 3) },
+      { lab: "Z span", val: fmt(zhi - zlo, 4), sub: "no filtered series in file — deviation n/a" },
+    ];
+  } else if (!multi()) {
     const { raw, filt, delta } = state.datasets[0].data;
     const { maxAbs, maxAt, rms } = deltaStats(delta);
     tiles = [
@@ -799,6 +851,15 @@ function renderTiles() {
   } else {
     // one tile per file: max |Δ| headline, RMS and point counts underneath
     tiles = state.datasets.map(ds => {
+      if (ds.data.profileOnly) {
+        const [zlo, zhi] = zRange(ds.data.raw);
+        return {
+          lab: ds.label, color: seriesColor(ds, "raw"),
+          val: fmt(zhi - zlo, 4),
+          sub: `Z span · ${fmt(zlo, 3)} to ${fmt(zhi, 3)}`,
+          sub2: `profile ${ds.data.raw.x.length.toLocaleString("en-US")} pts (no filtered)`,
+        };
+      }
       const { maxAbs, maxAt, rms } = deltaStats(ds.data.delta);
       return {
         lab: ds.label, color: seriesColor(ds, "raw"),
@@ -856,9 +917,28 @@ function renderTable() {
     opt.value = i; opt.textContent = ds.label; opt.selected = i === state.tableIdx;
     sel.appendChild(opt);
   });
-  const { raw, filt, delta, sharedGrid } = state.datasets[state.tableIdx].data;
+  const { raw, filt, delta, sharedGrid, profileOnly } = state.datasets[state.tableIdx].data;
   const table = document.getElementById("dataTable");
   table.textContent = "";
+  if (profileOnly) {
+    document.getElementById("tableNote").textContent = "";
+    const thead = document.createElement("thead");
+    const trh = document.createElement("tr");
+    for (const h of ["X-Pos", "Z-Pos"]) {
+      const th = document.createElement("th"); th.textContent = h; trh.appendChild(th);
+    }
+    thead.appendChild(trh); table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (let i = 0; i < raw.x.length; i++) {
+      const tr = document.createElement("tr");
+      for (const v of [fmt(raw.x[i], 3), fmt(raw.z[i], 4)]) {
+        const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    return;
+  }
   const filtLabel = sharedGrid ? "Z-Filtered" : "Z-Filtered (interp.)";
   document.getElementById("tableNote").textContent = sharedGrid
     ? "" : "Filtered values interpolated onto the raw X grid (the filtered series has its own grid).";
@@ -918,7 +998,7 @@ function refresh() {
   if (!has) { state.xFull = state.xDomain = null; state.hoverX = null; return; }
   const xs = [];
   for (const ds of state.datasets) {
-    for (const s of [ds.data.raw, ds.data.filt]) xs.push(s.x[0], s.x[s.x.length - 1]);
+    for (const s of [ds.data.raw, ds.data.filt]) if (s) xs.push(s.x[0], s.x[s.x.length - 1]);
   }
   state.xFull = [Math.min(...xs), Math.max(...xs)];
   if (state.xFull[0] === state.xFull[1]) state.xFull = [state.xFull[0] - 1, state.xFull[1] + 1];
@@ -926,6 +1006,11 @@ function refresh() {
   state.hoverX = null;
   document.getElementById("deltaNote").textContent = state.datasets.every(ds => ds.data.sharedGrid)
     ? "" : "filtered interpolated onto the raw X grid";
+  // profile-only files have no raw/filtered pair: hide the deviation chart
+  // when none of the loaded files has one
+  document.getElementById("deltaCard").style.display = allProfileOnly() ? "none" : "";
+  document.getElementById("mainTitle").textContent = allProfileOnly()
+    ? "Profile (Z over X position)" : "Profile — raw vs filtered (Z over X position)";
   renderLegend(); renderTiles(); renderMeta(); renderTable(); redrawAll();
 }
 

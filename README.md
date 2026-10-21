@@ -18,6 +18,11 @@ with per-file toggles and remove buttons in the legend). Three formats are suppo
   `Z-Raw` is a positional stream sampled every 0.1 mm from the scan start —
   the "CSV raw X" control sets the step, or switches to row-aligned parsing
   for CSVs where all columns share the `X-Pos` grid.
+- **Profile CSV** — a single `X-pos;Z-pos` profile (e.g. `HYUNDAI.csv`). It's plotted
+  as one "Profile" series. The deviation chart is hidden, since there's no filtered
+  series to compare against. The `0.0` padding rows are dropped, and the
+  key;value footer (Entry Mode, Rpm At Start, Laser Start Position, …) shows in
+  the Scan parameters card. These files can be compared with the other formats.
 - **JSON** — either `{ "arRawX": [], "arRawZ": [], "arFiltX": [], "arFiltZ": [] }`
   or an array of row objects with `X-Pos` / `Z-Raw` / `Z-Filtered` fields
 - **Bug report JSON** — app bug report exports with the arrays nested under
